@@ -1,0 +1,55 @@
+# nginx.conf.example
+# Put this in /etc/nginx/sites-available/mail.yourdomain.com and symlink to sites-enabled.
+#
+# PM2 cluster mode (ecosystem.config.js) already load-balances across CPU cores
+# on port 3000 internally. Nginx's job here is: TLS termination, being the
+# public-facing edge, and adding a second layer of request limiting.
+
+limit_req_zone $binary_remote_addr zone=mailapi:10m rate=10r/s;
+
+server {
+    listen 80;
+    server_name mail.yourdomain.com;
+    return 301 https://$host$request_uri;   # force HTTPS
+}
+
+server {
+    listen 443 ssl http2;
+    server_name mail.yourdomain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/mail.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mail.yourdomain.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # basic hardening headers (helmet already sets most app-level ones)
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    limit_req zone=mailapi burst=20 nodelay;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_cookie_path / "/; secure; SameSite=strict";
+    }
+}
+
+# ---
+# If you later run this across MULTIPLE machines (not just multiple cores on
+# one box via PM2), replace `proxy_pass http://127.0.0.1:3000;` above with:
+#
+# upstream mail_backend {
+#     least_conn;
+#     server 10.0.0.1:3000;
+#     server 10.0.0.2:3000;
+#     server 10.0.0.3:3000;
+# }
+# ...and `proxy_pass http://mail_backend;`
+#
+# Note: SQLite (used by storage.js) only works safely from ONE machine at a
+# time. True multi-machine scaling needs a networked database (Postgres/MySQL)
+# instead - worth doing once traffic actually needs more than one box.

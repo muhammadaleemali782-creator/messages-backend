@@ -1,0 +1,35 @@
+# render.yaml
+# Deploy: push this repo to GitHub, then on Render dashboard -> New -> Blueprint,
+# point it at the repo. Render reads this file automatically.
+#
+# IMPORTANT: RUN_MODE=api-only is set below on purpose. Render cannot receive
+# raw inbound SMTP (no public TCP port 25) and cannot send on port 25 either
+# (blocked platform-wide, even paid). So `src/receive.js` and `src/send.js`'s
+# direct-to-MX path will NOT work here. This deploys the webmail UI + auth +
+# database-backed inbox/API only. See README "Deploying without a VPS" for
+# what to do about actual mail delivery.
+
+services:
+  - type: web
+    name: mail-api
+    runtime: node
+    plan: starter          # free plan blocks even port 587; starter+ needed if you add an SMTP relay later
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RUN_MODE
+        value: api-only
+      - key: API_PORT
+        value: 10000        # Render provides $PORT - see note in index.js if you bind to it explicitly
+      - key: MONGODB_URI
+        sync: false          # set manually in Render dashboard (Atlas connection string)
+      - key: JWT_SECRET
+        generateValue: true  # Render auto-generates a strong random value
+      - key: ALLOWED_ORIGIN
+        sync: false          # set to your deployed frontend URL, e.g. https://mail-api.onrender.com
+      - key: MAIL_DOMAIN
+        sync: false
+      - key: MAIL_FROM
+        sync: false
