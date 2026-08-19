@@ -48,4 +48,23 @@ const otpVerifyLimiter = rateLimit({
   message: { error: 'Too many verification attempts. Request a new OTP.' },
 });
 
-module.exports = { loginLimiter, signupLimiter, otpLimiter, mailSendLimiter, generalLimiter, otpVerifyLimiter };
+// Reset requests: someone spamming this could flood the admin's queue.
+// 5 / hour per IP.
+const resetRequestLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many reset requests. Please wait before trying again.' },
+});
+
+// Admin login: fewer, stricter attempts than regular user login since this
+// account can reset anyone's password. 5 / 15 min per IP.
+const adminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many admin login attempts. Try again later.' },
+});
+
+module.exports = {
+  loginLimiter, signupLimiter, otpLimiter, mailSendLimiter, generalLimiter, otpVerifyLimiter,
+  resetRequestLimiter, adminLoginLimiter,
+};

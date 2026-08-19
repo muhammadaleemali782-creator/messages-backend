@@ -24,6 +24,10 @@ function isValidBody(v) {
 function isValidOtp(v) {
   return typeof v === 'string' && /^\d{6}$/.test(v);
 }
+function isValidContact(v) {
+  // loose check - WhatsApp number, phone, or short free-text note; not a strict format
+  return typeof v === 'string' && v.length <= 100;
+}
 
 // Strips characters/sequences that have no business being in plain-text mail
 // content and are common injection/control-character abuse vectors. This is
@@ -40,5 +44,5 @@ function sanitizePlainText(v) {
 
 module.exports = {
   isValidIdentifier, isValidProduct, isValidPassword,
-  isValidSubject, isValidBody, isValidOtp, sanitizePlainText,
+  isValidSubject, isValidBody, isValidOtp, isValidContact, sanitizePlainText,
 };

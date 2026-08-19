@@ -50,6 +50,24 @@ const messageSchema = new mongoose.Schema({
 });
 const Message = mongoose.model('Message', messageSchema);
 
+const adminSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  passwordHash: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now },
+});
+const Admin = mongoose.model('Admin', adminSchema);
+
+const resetRequestSchema = new mongoose.Schema({
+  product: { type: String, required: true, index: true, lowercase: true, trim: true },
+  identifier: { type: String, required: true, lowercase: true, trim: true },
+  contact: { type: String, default: '' }, // WhatsApp number or other contact info, optional
+  status: { type: String, enum: ['pending', 'resolved'], default: 'pending', index: true },
+  createdAt: { type: Date, default: Date.now },
+  resolvedAt: { type: Date, default: null },
+  resolvedBy: { type: String, default: null }, // admin username who handled it
+});
+const ResetRequest = mongoose.model('ResetRequest', resetRequestSchema);
+
 // ---- compression ----
 const deflate = (str) => zlib.deflateRawSync(Buffer.from(str, 'utf8'));
 const inflate = (buf) => zlib.inflateRawSync(buf).toString('utf8');
@@ -169,8 +187,54 @@ async function findProductByKeyHash(apiKeyHash) {
   return Product.findOne({ apiKeyHash, active: true }).lean();
 }
 
+// ---- admins ----
+async function createAdmin(username, passwordHash) {
+  return Admin.create({ username: username.trim().toLowerCase(), passwordHash });
+}
+async function findAdmin(username) {
+  return Admin.findOne({ username: username.trim().toLowerCase() }).lean();
+}
+
+// ---- password reset requests (manual admin-handled flow) ----
+async function createResetRequest(product, identifier, contact) {
+  const doc = await ResetRequest.create({
+    product: product.trim().toLowerCase(),
+    identifier: identifier.trim().toLowerCase(),
+    contact: contact || '',
+  });
+  return doc._id.toString();
+}
+async function listPendingRequests() {
+  const docs = await ResetRequest.find({ status: 'pending' }).sort({ createdAt: -1 }).lean();
+  return docs.map(d => ({
+    id: d._id.toString(),
+    product: d.product,
+    identifier: d.identifier,
+    contact: d.contact,
+    createdAt: Math.floor(new Date(d.createdAt).getTime() / 1000),
+  }));
+}
+async function getResetRequest(id) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  const d = await ResetRequest.findById(id).lean();
+  if (!d) return null;
+  return {
+    id: d._id.toString(), product: d.product, identifier: d.identifier,
+    contact: d.contact, status: d.status,
+  };
+}
+async function resolveResetRequest(id, adminUsername) {
+  if (!mongoose.isValidObjectId(id)) return;
+  await ResetRequest.updateOne(
+    { _id: id },
+    { status: 'resolved', resolvedAt: new Date(), resolvedBy: adminUsername }
+  );
+}
+
 module.exports = {
   saveMessage, listInbox, getMessage, markRead, markUsed, dbSizeBytes,
   createUser, findUser, updatePassword, recordFailedLogin, clearFailedLogins, isLocked,
   createProduct, findProductByName, findProductByKeyHash,
+  createAdmin, findAdmin,
+  createResetRequest, listPendingRequests, getResetRequest, resolveResetRequest,
 };

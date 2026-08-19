@@ -18,6 +18,7 @@ const cookieParser = require('cookie-parser');
 const sanitizeBody = require('./sanitizeBody');
 
 const auth = require('./auth');
+const adminAuth = require('./adminAuth');
 const storage = require('./storage');
 const { requireApiKey } = require('./apiKey');
 const { sendOtp, verifyOtp } = require('./otp');
@@ -25,6 +26,7 @@ const { sendDirect } = require('./send');
 const v = require('./validate');
 const {
   loginLimiter, signupLimiter, otpLimiter, otpVerifyLimiter, mailSendLimiter, generalLimiter,
+  resetRequestLimiter, adminLoginLimiter,
 } = require('./rateLimits');
 
 const app = express();
@@ -218,6 +220,78 @@ app.post('/mail/send', auth.requireAuth, mailSendLimiter, async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------- MANUAL PASSWORD RESET REQUEST (admin-handled, e.g. via WhatsApp) ----------------
+// This doesn't touch the OTP/email flow above at all - it's a separate, simpler
+// path: user submits a request, an admin reviews it in /admin.html and manually
+// sets a new password, which they then relay to the user themselves (WhatsApp,
+// phone call, whatever) - that hand-off happens outside this system entirely.
+
+app.post('/reset-request', resetRequestLimiter, async (req, res) => {
+  const { product, identifier, contact } = req.body;
+  if (!v.isValidProduct(product)) return badRequest(res, 'Invalid product');
+  if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
+  if (contact !== undefined && !v.isValidContact(contact)) return badRequest(res, 'Invalid contact value');
+  // Only create a request if the account actually exists, but always respond
+  // the same way either way - don't let this endpoint be used to probe which
+  // identifiers are registered.
+  if (await storage.findUser(product, identifier)) {
+    await storage.createResetRequest(product, identifier, v.sanitizePlainText(contact || ''));
+  }
+  res.json({ ok: true });
+});
+
+// ---------------- ADMIN (separate login, separate cookie, manual reset handling) ----------------
+
+app.post('/admin/login', adminLoginLimiter, async (req, res) => {
+  const { username, password } = req.body;
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(401).json({ error: 'Invalid username or password' });
+  }
+  try {
+    const loggedIn = await adminAuth.login(username, password);
+    adminAuth.setSessionCookie(res, loggedIn);
+    res.json({ ok: true, username: loggedIn });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+app.post('/admin/logout', (req, res) => {
+  adminAuth.clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.get('/admin/me', adminAuth.requireAdminAuth, (req, res) => {
+  res.json(req.admin);
+});
+
+app.get('/admin/requests', adminAuth.requireAdminAuth, async (req, res) => {
+  res.json(await storage.listPendingRequests());
+});
+
+app.post('/admin/requests/:id/resolve', adminAuth.requireAdminAuth, async (req, res) => {
+  const request = await storage.getResetRequest(req.params.id);
+  if (!request) return res.status(404).json({ error: 'Request not found' });
+  if (request.status !== 'pending') return badRequest(res, 'Already resolved');
+
+  let { newPassword } = req.body;
+  if (newPassword !== undefined && !v.isValidPassword(newPassword)) {
+    return badRequest(res, 'Password must be 8-200 characters');
+  }
+  if (!newPassword) {
+    // generate a random one if the admin didn't type one in
+    newPassword = require('crypto').randomBytes(9).toString('base64').replace(/[+/=]/g, '');
+  }
+
+  await auth.resetPassword(request.product, request.identifier, newPassword);
+  await storage.resolveResetRequest(req.params.id, req.admin.username);
+
+  // The plaintext password is returned exactly once, here, to the admin who
+  // is handling this specific request - never stored anywhere, never logged.
+  // The admin is expected to relay it manually (WhatsApp, call, etc).
+  res.json({ ok: true, newPassword, identifier: request.identifier, contact: request.contact });
 });
 
 function start(port = 3000) {
