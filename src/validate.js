@@ -24,6 +24,9 @@ function isValidBody(v) {
 function isValidOtp(v) {
   return typeof v === 'string' && /^\d{6}$/.test(v);
 }
+function isValidUsername(v) {
+  return typeof v === 'string' && /^[a-zA-Z0-9_]{3,40}$/.test(v);
+}
 function isValidContact(v) {
   // loose check - WhatsApp number, phone, or short free-text note; not a strict format
   return typeof v === 'string' && v.length <= 100;
@@ -44,5 +47,5 @@ function sanitizePlainText(v) {
 
 module.exports = {
   isValidIdentifier, isValidProduct, isValidPassword,
-  isValidSubject, isValidBody, isValidOtp, isValidContact, sanitizePlainText,
+  isValidSubject, isValidBody, isValidOtp, isValidUsername, isValidContact, sanitizePlainText,
 };

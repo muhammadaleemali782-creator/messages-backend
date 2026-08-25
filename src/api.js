@@ -244,6 +244,24 @@ app.post('/reset-request', resetRequestLimiter, async (req, res) => {
 
 // ---------------- ADMIN (separate login, separate cookie, manual reset handling) ----------------
 
+// One-time admin creation over HTTP - needed because Render's free tier has
+// no Shell access. Locked behind ADMIN_SETUP_KEY, a secret only you set in
+// Render's Environment tab (never in code, never in git). Anyone without
+// that exact key gets a 401 - this is not reachable by guessing.
+app.post('/admin/bootstrap', adminLoginLimiter, async (req, res) => {
+  const setupKey = process.env.ADMIN_SETUP_KEY;
+  if (!setupKey) return res.status(503).json({ error: 'ADMIN_SETUP_KEY not configured on the server' });
+  if (req.header('X-Setup-Key') !== setupKey) return res.status(401).json({ error: 'Invalid setup key' });
+
+  const { username, password } = req.body;
+  if (!v.isValidUsername(username)) return badRequest(res, 'Username must be 3-40 letters/numbers/underscore');
+  if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 8-200 characters');
+  if (await storage.findAdmin(username)) return badRequest(res, 'Admin already exists');
+
+  await adminAuth.createAdmin(username, password);
+  res.json({ ok: true, username });
+});
+
 app.post('/admin/login', adminLoginLimiter, async (req, res) => {
   const { username, password } = req.body;
   if (typeof username !== 'string' || typeof password !== 'string') {

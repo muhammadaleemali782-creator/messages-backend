@@ -53,4 +53,9 @@ function requireAdminAuth(req, res, next) {
   }
 }
 
-module.exports = { login, setSessionCookie, clearSessionCookie, requireAdminAuth, COOKIE_NAME };
+async function createAdmin(username, password) {
+  const hash = await bcrypt.hash(password, 12);
+  await storage.createAdmin(username, hash);
+}
+
+module.exports = { login, createAdmin, setSessionCookie, clearSessionCookie, requireAdminAuth, COOKIE_NAME };
