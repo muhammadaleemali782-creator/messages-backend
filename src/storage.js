@@ -31,7 +31,9 @@ const Product = mongoose.model('Product', productSchema);
 const userSchema = new mongoose.Schema({
   product: { type: String, required: true, index: true, lowercase: true, trim: true },
   identifier: { type: String, required: true, lowercase: true, trim: true }, // email or userId, scoped per-product
+  displayName: { type: String, default: '', trim: true },
   passwordHash: { type: String, required: true },
+  phone: { type: String, default: '' }, // AES-256-GCM encrypted - never stored plaintext (see src/crypto.js)
   createdAt: { type: Date, default: Date.now },
   failedAttempts: { type: Number, default: 0 },
   lockedUntil: { type: Date, default: null },
@@ -135,11 +137,12 @@ async function dbSizeBytes() {
 }
 
 // ---- users (auth, product-scoped) ----
-async function createUser(product, identifier, passwordHash) {
+async function createUser(product, identifier, passwordHash, phoneEncrypted) {
   return User.create({
     product: product.trim().toLowerCase(),
     identifier: identifier.trim().toLowerCase(),
     passwordHash,
+    phone: phoneEncrypted || '',
   });
 }
 async function findUser(product, identifier) {

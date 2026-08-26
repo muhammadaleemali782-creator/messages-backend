@@ -27,6 +27,18 @@ function isValidOtp(v) {
 function isValidUsername(v) {
   return typeof v === 'string' && /^[a-zA-Z0-9_]{3,40}$/.test(v);
 }
+function isValidName(v) {
+  // person's display name - letters, spaces, common punctuation, 2-60 chars
+  return typeof v === 'string' && v.trim().length >= 2 && v.trim().length <= 60 && !/[<>{}$]/.test(v);
+}
+function isValidPhone(v) {
+  // digits, optional leading +, spaces/dashes allowed while typing - 7 to 16 digits total
+  const digits = String(v).replace(/[^0-9]/g, '');
+  return typeof v === 'string' && digits.length >= 7 && digits.length <= 16;
+}
+function normalizePhone(v) {
+  return String(v).replace(/[^0-9]/g, '');
+}
 function isValidContact(v) {
   // loose check - WhatsApp number, phone, or short free-text note; not a strict format
   return typeof v === 'string' && v.length <= 100;
@@ -48,4 +60,5 @@ function sanitizePlainText(v) {
 module.exports = {
   isValidIdentifier, isValidProduct, isValidPassword,
   isValidSubject, isValidBody, isValidOtp, isValidUsername, isValidContact, sanitizePlainText,
+  isValidName, isValidPhone, normalizePhone,
 };

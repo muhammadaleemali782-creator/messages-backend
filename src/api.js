@@ -121,14 +121,19 @@ app.post('/provision/message', requireApiKey, mailSendLimiter, async (req, res) 
 });
 
 // ---------------- BROWSER AUTH (end users, via cookie session) ----------------
+// No product selector in this UI - fixed to a single product (src/config.js).
+// Signup takes a display name + password + phone; the email/username is
+// generated server-side (Gmail-style, with duplicate suggestion built in).
 
 app.post('/auth/signup', signupLimiter, async (req, res) => {
-  const { product, identifier, password } = req.body;
-  if (!v.isValidProduct(product)) return badRequest(res, 'Invalid product');
-  if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
+  const { name, password, phone } = req.body;
+  if (!v.isValidName(name)) return badRequest(res, 'Name must be 2-60 characters');
   if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 8-200 characters');
+  if (phone !== undefined && phone !== '' && !v.isValidPhone(phone)) {
+    return badRequest(res, 'Phone must be 7-16 digits');
+  }
   try {
-    const created = await auth.signup(product, identifier, password);
+    const created = await auth.signup(name, password, phone ? v.normalizePhone(phone) : '');
     auth.setSessionCookie(res, created.product, created.identifier);
     res.json({ ok: true, ...created });
   } catch (err) {
@@ -137,12 +142,12 @@ app.post('/auth/signup', signupLimiter, async (req, res) => {
 });
 
 app.post('/auth/login', loginLimiter, async (req, res) => {
-  const { product, identifier, password } = req.body;
-  if (!v.isValidProduct(product) || !v.isValidIdentifier(identifier) || typeof password !== 'string') {
+  const { identifier, password } = req.body;
+  if (!v.isValidIdentifier(identifier) || typeof password !== 'string') {
     return res.status(401).json({ error: 'Invalid email or password' }); // generic - don't leak which field failed
   }
   try {
-    const loggedIn = await auth.login(product, identifier, password);
+    const loggedIn = await auth.login(identifier, password);
     auth.setSessionCookie(res, loggedIn.product, loggedIn.identifier);
     res.json({ ok: true, ...loggedIn });
   } catch (err) {
@@ -181,7 +186,7 @@ app.post('/otp/reset-password', otpVerifyLimiter, async (req, res) => {
   if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 8-200 characters');
   const valid = await verifyOtp(product, identifier, otp);
   if (!valid) return badRequest(res, 'Invalid or expired OTP');
-  await auth.resetPassword(product, identifier, newPassword);
+  await auth.resetPassword(identifier, newPassword);
   res.json({ ok: true });
 });
 
@@ -224,21 +229,21 @@ app.post('/mail/send', auth.requireAuth, mailSendLimiter, async (req, res) => {
 
 // ---------------- MANUAL PASSWORD RESET REQUEST (admin-handled, e.g. via WhatsApp) ----------------
 // This doesn't touch the OTP/email flow above at all - it's a separate, simpler
-// path: user submits a request, an admin reviews it in /admin.html and manually
-// sets a new password, which they then relay to the user themselves (WhatsApp,
-// phone call, whatever) - that hand-off happens outside this system entirely.
+// path: user submits their email + the phone number they signed up with. Only
+// if that phone matches what's on file (encrypted, see src/crypto.js) does a
+// pending request actually get created - so this can't be used to spam an
+// admin's queue for accounts that aren't yours, or to probe which identifiers
+// exist. An admin then reviews it in /admin.html and manually sets a new
+// password, which they relay to the user themselves (WhatsApp, call, etc) -
+// that hand-off happens outside this system entirely.
 
 app.post('/reset-request', resetRequestLimiter, async (req, res) => {
-  const { product, identifier, contact } = req.body;
-  if (!v.isValidProduct(product)) return badRequest(res, 'Invalid product');
+  const { identifier, phone } = req.body;
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
-  if (contact !== undefined && !v.isValidContact(contact)) return badRequest(res, 'Invalid contact value');
-  // Only create a request if the account actually exists, but always respond
-  // the same way either way - don't let this endpoint be used to probe which
-  // identifiers are registered.
-  if (await storage.findUser(product, identifier)) {
-    await storage.createResetRequest(product, identifier, v.sanitizePlainText(contact || ''));
-  }
+  if (!v.isValidPhone(phone)) return badRequest(res, 'Phone must be 7-16 digits');
+  // Always the same response either way - don't reveal whether the identifier
+  // exists or whether the phone matched.
+  await auth.checkAndCreateResetRequest(identifier, phone);
   res.json({ ok: true });
 });
 
@@ -303,7 +308,7 @@ app.post('/admin/requests/:id/resolve', adminAuth.requireAdminAuth, async (req, 
     newPassword = require('crypto').randomBytes(9).toString('base64').replace(/[+/=]/g, '');
   }
 
-  await auth.resetPassword(request.product, request.identifier, newPassword);
+  await auth.resetPassword(request.identifier, newPassword);
   await storage.resolveResetRequest(req.params.id, req.admin.username);
 
   // The plaintext password is returned exactly once, here, to the admin who
