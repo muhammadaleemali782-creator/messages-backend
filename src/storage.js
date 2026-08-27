@@ -38,12 +38,31 @@ const messageSchema = new mongoose.Schema({
   product: { type: String, required: true, index: true, lowercase: true, trim: true },
   from: { type: String, required: true, lowercase: true, trim: true, index: true },
   to: { type: String, required: true, lowercase: true, trim: true, index: true },
-  ts: { type: Date, default: Date.now },
+  ts: { type: Date, default: Date.now, index: true },
   subject: { type: Buffer, required: true },
   body: { type: Buffer, required: true },
   flags: { type: Number, default: 0 },
 });
-const Message = mongoose.model('Message', messageSchema);
+
+// ⭐ AUTOMATIC 3-HOUR TTL EXPIRATION (MongoDB Native Auto-Delete)
+messageSchema.index({ ts: 1 }, { expireAfterSeconds: 3 * 60 * 60 });
+const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
+
+// Periodic 3-hour cleanup worker
+const THREE_HOURS_MS = 3 * 60 * 60 * 1000;
+async function purgeExpiredMessages() {
+  try {
+    const cutoff = new Date(Date.now() - THREE_HOURS_MS);
+    const res = await Message.deleteMany({ ts: { $lt: cutoff } });
+    if (res.deletedCount > 0) {
+      console.log(`🧹 Auto-purged ${res.deletedCount} messages older than 3 hours.`);
+    }
+  } catch (e) {
+    console.warn("Auto-purge notice:", e.message);
+  }
+}
+setInterval(purgeExpiredMessages, 5 * 60 * 1000); // Check every 5 minutes
+setTimeout(purgeExpiredMessages, 3000); // Check on boot
 
 const adminSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -98,7 +117,9 @@ async function listInbox(product, identifier) {
   const domain = (process.env.MAIL_DOMAIN || 'educaveda.com').toLowerCase();
   const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
 
+  const cutoff = new Date(Date.now() - (3 * 60 * 60 * 1000));
   const query = {
+    ts: { $gte: cutoff },
     $or: [
       { to: normId },
       { to: withDomain },
