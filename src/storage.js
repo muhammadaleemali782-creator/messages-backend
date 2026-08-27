@@ -146,9 +146,19 @@ async function createUser(product, identifier, passwordHash, phoneEncrypted) {
   });
 }
 async function findUser(product, identifier) {
+  const normId = identifier.trim().toLowerCase();
+  const baseId = normId.split('@')[0];
+  const domain = process.env.MAIL_DOMAIN || 'educaveda.com';
+  const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
+
   return User.findOne({
-    product: product.trim().toLowerCase(),
-    identifier: identifier.trim().toLowerCase(),
+    $or: [
+      { identifier: normId },
+      { identifier: withDomain },
+      { identifier: baseId },
+      { identifier: { $regex: new RegExp(`^${normId}$`, 'i') } },
+      { identifier: { $regex: new RegExp(`^${baseId}@`, 'i') } }
+    ]
   }).lean();
 }
 async function updatePassword(product, identifier, passwordHash) {

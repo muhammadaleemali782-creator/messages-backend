@@ -3,7 +3,7 @@
 // name, different JWT payload shape - an admin session can never be confused
 // with or escalated from a regular user session, and vice versa.
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const storage = require('./storage');
 

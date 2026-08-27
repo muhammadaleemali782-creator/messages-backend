@@ -6,7 +6,7 @@
 // and is only ever used to verify a password-reset request matches the
 // account it claims to be for.
 
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const storage = require('./storage');
 const cryptoBox = require('./crypto');
