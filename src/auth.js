@@ -95,11 +95,52 @@ async function findStoreUserAndSync(identifier) {
   return null;
 }
 
+
+// ⭐ DYNAMIC UDAAN DB FALLBACK FOR INSTANT LOGIN
+let udaanDbConnection = null;
+function getUdaanDb() {
+  const uri = process.env.UDAAN_MONGO_URI || 'mongodb+srv://muhammadaleemali888_db_user:k6DVmZ7sWT0EykzF@cluster0.nxu5izr.mongodb.net/udaan-achievers?retryWrites=true&w=majority';
+  if (!udaanDbConnection) {
+    udaanDbConnection = require('mongoose').createConnection(uri);
+  }
+  return udaanDbConnection;
+}
+
+async function findUdaanUserAndSync(identifier) {
+  try {
+    const conn = getUdaanDb();
+    const normId = (identifier || '').trim().toLowerCase();
+    const Student = conn.models.Student || conn.model('Student', new require('mongoose').Schema({}, { strict: false }), 'students');
+    const u = await Student.findOne({
+      $or: [
+        { email: normId },
+        { studentId: { $regex: new RegExp(`^${normId}$`, 'i') } }
+      ]
+    }).lean();
+
+    if (u && u.passwordHash) {
+      await storage.createUser(
+        PRODUCT,
+        normId,
+        u.passwordHash,
+        ''
+      );
+      return await storage.findUser(PRODUCT, normId);
+    }
+  } catch(e) {
+    console.error('Udaan DB fallback error:', e.message);
+  }
+  return null;
+}
+
 async function login(identifier, password) {
   identifier = identifier.trim().toLowerCase();
   const user = await storage.findUser(PRODUCT, identifier);
   if (!user) {
     user = await findStoreUserAndSync(identifier);
+  }
+  if (!user) {
+    user = await findUdaanUserAndSync(identifier);
   }
   if (!user) {
     await bcrypt.compare(password, '$2b$12$invalidsaltinvalidsaltinvalidsal.'); // constant-time-ish decoy
