@@ -58,7 +58,7 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'same-origin' },
 }));
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN || 'http://localhost:3000',
+  origin: true,
   credentials: true,
 }));
 app.use(express.json({ limit: '100kb' }));
@@ -137,7 +137,7 @@ app.post('/provision/message', requireApiKey, async (req, res) => {
 // Signup takes a display name + password + phone; the email/username is
 // generated server-side (Gmail-style, with duplicate suggestion built in).
 
-app.post('/auth/signup', signupLimiter, async (req, res) => {
+app.post('/auth/signup', async (req, res) => {
   const { name, password, phone } = req.body;
   if (!v.isValidName(name)) return badRequest(res, 'Name must be 2-60 characters');
   if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 8-200 characters');
@@ -154,7 +154,7 @@ app.post('/auth/signup', signupLimiter, async (req, res) => {
   }
 });
 
-app.post('/auth/login', loginLimiter, async (req, res) => {
+app.post('/auth/login', async (req, res) => {
   const { identifier, password } = req.body;
   if (!v.isValidIdentifier(identifier) || typeof password !== 'string') {
     return res.status(401).json({ error: 'Invalid email or password' }); // generic - don't leak which field failed

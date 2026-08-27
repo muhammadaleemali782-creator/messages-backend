@@ -18,7 +18,7 @@ if (!JWT_SECRET || JWT_SECRET.length < 32) {
     'JWT_SECRET missing or too short. Set a random 32+ char string in .env (e.g. `openssl rand -hex 32`).'
   );
 }
-const TOKEN_TTL = '2h';
+const TOKEN_TTL = '30d';
 const COOKIE_NAME = 'session';
 
 function slugify(name) {

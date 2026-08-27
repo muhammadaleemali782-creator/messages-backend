@@ -206,8 +206,22 @@ async function findUser(product, identifier) {
 async function updatePassword(product, identifier, passwordHash) {
   const normId = (identifier || '').trim().toLowerCase();
   const baseId = normId.split('@')[0];
+  const domain = (process.env.MAIL_DOMAIN || 'educaveda.com').toLowerCase();
+  const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
+
   await User.updateMany(
-    { $or: [{ identifier: normId }, { identifier: baseId }] },
+    { 
+      $or: [
+        { identifier: normId },
+        { identifier: baseId },
+        { identifier: withDomain },
+        { identifier: { $regex: new RegExp(`^${normId}$`, 'i') } },
+        { identifier: { $regex: new RegExp(`^${baseId}@`, 'i') } }
+      ] 
+    },
+    { passwordHash, failedAttempts: 0, lockedUntil: null }
+  );
+}, { identifier: baseId }] },
     { passwordHash, failedAttempts: 0, lockedUntil: null }
   );
 }
