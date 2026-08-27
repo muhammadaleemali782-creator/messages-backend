@@ -103,57 +103,42 @@ async function listInbox(product, identifier) {
       { to: normId },
       { to: withDomain },
       { to: baseId },
-      { to: 'admin' },
-      { to: 'admin@gmail.com' },
-      { to: 'admin@educaveda.com' },
       { to: { $regex: new RegExp(`^${normId}$`, 'i') } },
       { to: { $regex: new RegExp(`^${baseId}@`, 'i') } }
     ]
   };
 
-  const docs = await Message.find(normId.startsWith('admin') ? query : {
-    $or: [
-      { to: normId },
-      { to: withDomain },
-      { to: baseId },
-      { to: { $regex: new RegExp(`^${baseId}$`, 'i') } }
-    ]
-  })
+  const docs = await Message.find(query)
     .sort({ ts: -1 })
     .select('_id from to ts subject body flags')
     .lean();
 
-  return docs.map(d => ({
-    id: d._id.toString(),
-    from: d.from,
-    to: d.to,
-    subject: inflate(d.subject),
-    body: inflate(d.body),
-    ts: Math.floor(new Date(d.ts).getTime() / 1000),
-    read: !!(d.flags & 1),
-    used: !!(d.flags & 2),
-  }));
-}
+  const seenContent = new Set();
+  const uniqueDocs = [];
 
-async function getMessage(id) {
-  if (!mongoose.isValidObjectId(id)) return null;
-  const d = await Message.findById(id).lean();
-  if (!d) return null;
-  return {
-    id: d._id.toString(),
-    product: d.product,
-    from: d.from,
-    to: d.to,
-    ts: Math.floor(new Date(d.ts).getTime() / 1000),
-    subject: inflate(d.subject),
-    body: inflate(d.body),
-    flags: d.flags || 0,
-  };
-}
+  for (const d of docs) {
+    const subj = inflate(d.subject);
+    const bdy = inflate(d.body);
+    // Key by rounded timestamp (within 2 seconds) and content to prevent exact duplicate spam
+    const timeKey = Math.floor(new Date(d.ts).getTime() / 2000);
+    const contentKey = `${timeKey}_${subj}_${bdy}`;
 
-async function markRead(id) {
-  if (!mongoose.isValidObjectId(id)) return;
-  await Message.updateOne({ _id: id }, { $bit: { flags: { or: 1 } } });
+    if (!seenContent.has(contentKey)) {
+      seenContent.add(contentKey);
+      uniqueDocs.push({
+        id: d._id.toString(),
+        from: d.from,
+        to: d.to,
+        subject: subj,
+        body: bdy,
+        ts: Math.floor(new Date(d.ts).getTime() / 1000),
+        read: !!(d.flags & 1),
+        used: !!(d.flags & 2),
+      });
+    }
+  }
+
+  return uniqueDocs;
 }
 
 async function markUsed(id) {
