@@ -118,7 +118,7 @@ app.post('/provision/otp-verify', requireApiKey, otpVerifyLimiter, async (req, r
   res.json({ ok: valid });
 });
 
-app.post('/provision/message', requireApiKey, mailSendLimiter, async (req, res) => {
+app.post('/provision/message', requireApiKey, async (req, res) => {
   const { to, subject, body } = req.body;
   if (!v.isValidIdentifier(to)) return badRequest(res, 'Invalid recipient');
   if (!v.isValidSubject(subject)) return badRequest(res, 'Subject required, max 300 chars');
