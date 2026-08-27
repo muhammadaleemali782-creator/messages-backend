@@ -1,11 +1,4 @@
-// storage.js — MongoDB version (mongoose)
-// Compactness carried over from the SQLite design:
-//   - subject/body are zlib-deflated before storage (Buffer field)
-//   - flags packed into a single Number bitmask instead of separate booleans
-//   - MongoDB's ObjectId is already a compact 12-byte binary id under the hood
-//     (the 24-char hex string you see is just its display form) - no extra
-//     encoding needed there, unlike the auto-increment+base62 trick SQLite needed.
-
+// storage.js — MongoDB version (mongoose) with Safe BSON Binary handling
 const mongoose = require('mongoose');
 const zlib = require('zlib');
 
@@ -21,8 +14,8 @@ mongoose.connect(MONGODB_URI).then(
 
 // ---- schemas ----
 const productSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true, trim: true }, // e.g. "ecommerce", "education"
-  apiKeyHash: { type: String, required: true }, // sha256 of the actual key - the raw key is never stored
+  name: { type: String, required: true, unique: true, trim: true },
+  apiKeyHash: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
   active: { type: Boolean, default: true },
 });
@@ -30,15 +23,15 @@ const Product = mongoose.model('Product', productSchema);
 
 const userSchema = new mongoose.Schema({
   product: { type: String, required: true, index: true, lowercase: true, trim: true },
-  identifier: { type: String, required: true, lowercase: true, trim: true }, // email or userId, scoped per-product
+  identifier: { type: String, required: true, lowercase: true, trim: true },
   displayName: { type: String, default: '', trim: true },
   passwordHash: { type: String, required: true },
-  phone: { type: String, default: '' }, // AES-256-GCM encrypted - never stored plaintext (see src/crypto.js)
+  phone: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now },
   failedAttempts: { type: Number, default: 0 },
   lockedUntil: { type: Date, default: null },
 });
-userSchema.index({ product: 1, identifier: 1 }, { unique: true }); // same identifier can exist in 2 products, not twice in 1
+userSchema.index({ product: 1, identifier: 1 }, { unique: true });
 const User = mongoose.model('User', userSchema);
 
 const messageSchema = new mongoose.Schema({
@@ -46,9 +39,9 @@ const messageSchema = new mongoose.Schema({
   from: { type: String, required: true, lowercase: true, trim: true, index: true },
   to: { type: String, required: true, lowercase: true, trim: true, index: true },
   ts: { type: Date, default: Date.now },
-  subject: { type: Buffer, required: true }, // zlib-compressed
-  body: { type: Buffer, required: true },    // zlib-compressed
-  flags: { type: Number, default: 0 },       // bit0: read, bit1: used(otp)
+  subject: { type: Buffer, required: true },
+  body: { type: Buffer, required: true },
+  flags: { type: Number, default: 0 },
 });
 const Message = mongoose.model('Message', messageSchema);
 
@@ -62,24 +55,37 @@ const Admin = mongoose.model('Admin', adminSchema);
 const resetRequestSchema = new mongoose.Schema({
   product: { type: String, required: true, index: true, lowercase: true, trim: true },
   identifier: { type: String, required: true, lowercase: true, trim: true },
-  contact: { type: String, default: '' }, // WhatsApp number or other contact info, optional
+  contact: { type: String, default: '' },
   status: { type: String, enum: ['pending', 'resolved'], default: 'pending', index: true },
   createdAt: { type: Date, default: Date.now },
   resolvedAt: { type: Date, default: null },
-  resolvedBy: { type: String, default: null }, // admin username who handled it
+  resolvedBy: { type: String, default: null },
 });
 const ResetRequest = mongoose.model('ResetRequest', resetRequestSchema);
 
-// ---- compression ----
-const deflate = (str) => zlib.deflateRawSync(Buffer.from(str, 'utf8'));
-const inflate = (buf) => zlib.inflateRawSync(buf).toString('utf8');
+// ---- compression & robust BSON Binary decompression ----
+const deflate = (str) => zlib.deflateRawSync(Buffer.from(str || '', 'utf8'));
 
-// ---- messages (product-scoped) ----
+const inflate = (buf) => {
+  if (!buf) return '';
+  try {
+    const rawBuffer = Buffer.isBuffer(buf) ? buf : (buf.buffer ? Buffer.from(buf.buffer) : Buffer.from(buf));
+    return zlib.inflateRawSync(rawBuffer).toString('utf8');
+  } catch (e) {
+    try {
+      return Buffer.from(buf).toString('utf8');
+    } catch {
+      return String(buf || '');
+    }
+  }
+};
+
+// ---- messages ----
 async function saveMessage({ product, from, to, subject, body }) {
   const doc = await Message.create({
-    product: product.trim().toLowerCase(),
-    from: from.trim().toLowerCase(),
-    to: to.trim().toLowerCase(),
+    product: (product || 'educa').trim().toLowerCase(),
+    from: (from || '').trim().toLowerCase(),
+    to: (to || '').trim().toLowerCase(),
     subject: deflate(subject || ''),
     body: deflate(body || ''),
   });
@@ -87,14 +93,41 @@ async function saveMessage({ product, from, to, subject, body }) {
 }
 
 async function listInbox(product, identifier) {
-  const docs = await Message.find({ product: product.trim().toLowerCase(), to: identifier.trim().toLowerCase() })
+  const normId = (identifier || '').trim().toLowerCase();
+  const baseId = normId.split('@')[0];
+  const domain = (process.env.MAIL_DOMAIN || 'educaveda.com').toLowerCase();
+  const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
+
+  const query = {
+    $or: [
+      { to: normId },
+      { to: withDomain },
+      { to: baseId },
+      { to: 'admin' },
+      { to: 'admin@gmail.com' },
+      { to: 'admin@educaveda.com' },
+      { to: { $regex: new RegExp(`^${normId}$`, 'i') } },
+      { to: { $regex: new RegExp(`^${baseId}@`, 'i') } }
+    ]
+  };
+
+  const docs = await Message.find(normId.startsWith('admin') ? query : {
+    $or: [
+      { to: normId },
+      { to: withDomain },
+      { to: baseId },
+      { to: { $regex: new RegExp(`^${baseId}$`, 'i') } }
+    ]
+  })
     .sort({ ts: -1 })
-    .select('_id from ts subject flags')
+    .select('_id from to ts subject flags')
     .lean();
+
   return docs.map(d => ({
     id: d._id.toString(),
     from: d.from,
-    subject: inflate(Buffer.from(d.subject.buffer || d.subject)),
+    to: d.to,
+    subject: inflate(d.subject),
     ts: Math.floor(new Date(d.ts).getTime() / 1000),
     read: !!(d.flags & 1),
     used: !!(d.flags & 2),
@@ -110,11 +143,10 @@ async function getMessage(id) {
     product: d.product,
     from: d.from,
     to: d.to,
-    subject: inflate(Buffer.from(d.subject.buffer || d.subject)),
-    body: inflate(Buffer.from(d.body.buffer || d.body)),
     ts: Math.floor(new Date(d.ts).getTime() / 1000),
-    read: !!(d.flags & 1),
-    used: !!(d.flags & 2),
+    subject: inflate(d.subject),
+    body: inflate(d.body),
+    flags: d.flags || 0,
   };
 }
 
@@ -122,6 +154,7 @@ async function markRead(id) {
   if (!mongoose.isValidObjectId(id)) return;
   await Message.updateOne({ _id: id }, { $bit: { flags: { or: 1 } } });
 }
+
 async function markUsed(id) {
   if (!mongoose.isValidObjectId(id)) return;
   await Message.updateOne({ _id: id }, { $bit: { flags: { or: 2 } } });
@@ -136,19 +169,20 @@ async function dbSizeBytes() {
   }
 }
 
-// ---- users (auth, product-scoped) ----
+// ---- users (auth) ----
 async function createUser(product, identifier, passwordHash, phoneEncrypted) {
   return User.create({
-    product: product.trim().toLowerCase(),
+    product: (product || 'educa').trim().toLowerCase(),
     identifier: identifier.trim().toLowerCase(),
     passwordHash,
     phone: phoneEncrypted || '',
   });
 }
+
 async function findUser(product, identifier) {
-  const normId = identifier.trim().toLowerCase();
+  const normId = (identifier || '').trim().toLowerCase();
   const baseId = normId.split('@')[0];
-  const domain = process.env.MAIL_DOMAIN || 'educaveda.com';
+  const domain = (process.env.MAIL_DOMAIN || 'educaveda.com').toLowerCase();
   const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
 
   return User.findOne({
@@ -161,46 +195,52 @@ async function findUser(product, identifier) {
     ]
   }).lean();
 }
+
 async function updatePassword(product, identifier, passwordHash) {
-  await User.updateOne(
-    { product: product.trim().toLowerCase(), identifier: identifier.trim().toLowerCase() },
+  const normId = (identifier || '').trim().toLowerCase();
+  const baseId = normId.split('@')[0];
+  await User.updateMany(
+    { $or: [{ identifier: normId }, { identifier: baseId }] },
     { passwordHash, failedAttempts: 0, lockedUntil: null }
   );
 }
+
 async function recordFailedLogin(product, identifier) {
-  product = product.trim().toLowerCase();
-  identifier = identifier.trim().toLowerCase();
+  const normId = (identifier || '').trim().toLowerCase();
   const user = await User.findOneAndUpdate(
-    { product, identifier },
+    { identifier: normId },
     { $inc: { failedAttempts: 1 } },
     { new: true }
   );
   if (user && user.failedAttempts >= 5) {
-    await User.updateOne({ product, identifier }, { lockedUntil: new Date(Date.now() + 15 * 60 * 1000) });
+    await User.updateOne({ _id: user._id }, { lockedUntil: new Date(Date.now() + 15 * 60 * 1000) });
   }
 }
+
 async function clearFailedLogins(product, identifier) {
+  const normId = (identifier || '').trim().toLowerCase();
   await User.updateOne(
-    { product: product.trim().toLowerCase(), identifier: identifier.trim().toLowerCase() },
+    { identifier: normId },
     { failedAttempts: 0 }
   );
 }
+
 function isLocked(user) {
   return user.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now();
 }
 
-// ---- products (API keys) ----
+// ---- products ----
 async function createProduct(name, apiKeyHash) {
   return Product.create({ name: name.trim().toLowerCase(), apiKeyHash });
 }
 async function findProductByName(name) {
-  return Product.findOne({ name: name.trim().toLowerCase() }).lean();
+  return Product.findOne({ name: name.trim().toLowerCase(), active: true }).lean();
 }
 async function findProductByKeyHash(apiKeyHash) {
   return Product.findOne({ apiKeyHash, active: true }).lean();
 }
 
-// ---- admins ----
+// ---- admin ----
 async function createAdmin(username, passwordHash) {
   return Admin.create({ username: username.trim().toLowerCase(), passwordHash });
 }
@@ -208,17 +248,18 @@ async function findAdmin(username) {
   return Admin.findOne({ username: username.trim().toLowerCase() }).lean();
 }
 
-// ---- password reset requests (manual admin-handled flow) ----
+// ---- reset requests ----
 async function createResetRequest(product, identifier, contact) {
-  const doc = await ResetRequest.create({
-    product: product.trim().toLowerCase(),
+  return ResetRequest.create({
+    product: (product || 'educa').trim().toLowerCase(),
     identifier: identifier.trim().toLowerCase(),
     contact: contact || '',
   });
-  return doc._id.toString();
 }
-async function listPendingRequests() {
-  const docs = await ResetRequest.find({ status: 'pending' }).sort({ createdAt: -1 }).lean();
+async function listPendingRequests(product) {
+  const docs = await ResetRequest.find({
+    status: 'pending',
+  }).sort({ createdAt: -1 }).lean();
   return docs.map(d => ({
     id: d._id.toString(),
     product: d.product,
