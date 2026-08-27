@@ -86,6 +86,18 @@ app.post('/provision/signup', requireApiKey, signupLimiter, async (req, res) => 
   }
 });
 
+app.post('/provision/update-password', requireApiKey, async (req, res) => {
+  const { identifier, newPassword } = req.body;
+  if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
+  if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 8-200 characters');
+  try {
+    await auth.resetPassword(identifier, newPassword);
+    res.json({ ok: true, message: 'Password updated successfully in mail server' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/provision/otp-send', requireApiKey, otpLimiter, async (req, res) => {
   const { identifier } = req.body;
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
@@ -135,7 +147,8 @@ app.post('/auth/signup', signupLimiter, async (req, res) => {
   try {
     const created = await auth.signup(name, password, phone ? v.normalizePhone(phone) : '');
     auth.setSessionCookie(res, created.product, created.identifier);
-    res.json({ ok: true, ...created });
+    const token = auth.issueToken(created.product, created.identifier);
+    res.json({ ok: true, token, ...created });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -149,7 +162,8 @@ app.post('/auth/login', loginLimiter, async (req, res) => {
   try {
     const loggedIn = await auth.login(identifier, password);
     auth.setSessionCookie(res, loggedIn.product, loggedIn.identifier);
-    res.json({ ok: true, ...loggedIn });
+    const token = auth.issueToken(loggedIn.product, loggedIn.identifier);
+    res.json({ ok: true, token, ...loggedIn });
   } catch (err) {
     res.status(401).json({ error: err.message });
   }

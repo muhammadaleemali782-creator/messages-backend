@@ -111,7 +111,9 @@ function clearSessionCookie(res) {
 }
 
 function requireAuth(req, res, next) {
-  const token = req.cookies?.[COOKIE_NAME];
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  const token = bearerToken || req.cookies?.[COOKIE_NAME];
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
     const payload = jwt.verify(token, JWT_SECRET);
@@ -124,5 +126,5 @@ function requireAuth(req, res, next) {
 
 module.exports = {
   signup, login, resetPassword, checkAndCreateResetRequest,
-  setSessionCookie, clearSessionCookie, requireAuth, COOKIE_NAME,
+  setSessionCookie, clearSessionCookie, requireAuth, issueToken, COOKIE_NAME,
 };
