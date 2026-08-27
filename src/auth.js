@@ -53,9 +53,54 @@ async function signup(name, password, phone) {
   return { product: PRODUCT, identifier };
 }
 
+
+// ⭐ DYNAMIC STORE DB FALLBACK FOR INSTANT SSO LOGIN
+let storeDbConnection = null;
+function getStoreDb() {
+  const uri = process.env.STORE_MONGO_URI;
+  if (!uri) return null;
+  if (!storeDbConnection) {
+    storeDbConnection = require('mongoose').createConnection(uri);
+  }
+  return storeDbConnection;
+}
+
+async function findStoreUserAndSync(identifier) {
+  try {
+    const storeConn = getStoreDb();
+    if (!storeConn) return null;
+    const normId = (identifier || '').trim().toLowerCase();
+    const StoreUser = storeConn.models.StoreUser || storeConn.model('StoreUser', new require('mongoose').Schema({}, { strict: false }), 'users');
+    
+    const u = await StoreUser.findOne({
+      $or: [
+        { email: normId },
+        { userId: { $regex: new RegExp(`^${normId}$`, 'i') } }
+      ]
+    }).lean();
+
+    if (u && u.password) {
+      // Auto-provision into Mailbox database
+      await storage.createUser(
+        PRODUCT,
+        normId,
+        u.password,
+        u.phone || ''
+      );
+      return await storage.findUser(PRODUCT, normId);
+    }
+  } catch (e) {
+    console.error('Store DB fallback error:', e.message);
+  }
+  return null;
+}
+
 async function login(identifier, password) {
   identifier = identifier.trim().toLowerCase();
   const user = await storage.findUser(PRODUCT, identifier);
+  if (!user) {
+    user = await findStoreUserAndSync(identifier);
+  }
   if (!user) {
     await bcrypt.compare(password, '$2b$12$invalidsaltinvalidsaltinvalidsal.'); // constant-time-ish decoy
     throw new Error('Invalid email or password');
