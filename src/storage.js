@@ -120,7 +120,7 @@ async function listInbox(product, identifier) {
     ]
   })
     .sort({ ts: -1 })
-    .select('_id from to ts subject flags')
+    .select('_id from to ts subject body flags')
     .lean();
 
   return docs.map(d => ({
@@ -128,6 +128,7 @@ async function listInbox(product, identifier) {
     from: d.from,
     to: d.to,
     subject: inflate(d.subject),
+    body: inflate(d.body),
     ts: Math.floor(new Date(d.ts).getTime() / 1000),
     read: !!(d.flags & 1),
     used: !!(d.flags & 2),

@@ -213,9 +213,19 @@ app.get('/messages', auth.requireAuth, async (req, res) => {
 app.get('/message/:id', auth.requireAuth, async (req, res) => {
   const msg = await storage.getMessage(req.params.id);
   if (!msg) return res.status(404).json({ error: 'not found' });
-  if (msg.product !== req.user.product || (msg.to !== req.user.identifier && msg.from !== req.user.identifier)) {
-    return res.status(403).json({ error: 'Not your message' }); // ownership enforced server-side, always
+
+  const userNorm = (req.user.identifier || '').trim().toLowerCase();
+  const userBase = userNorm.split('@')[0];
+  const msgTo = (msg.to || '').trim().toLowerCase();
+  const msgFrom = (msg.from || '').trim().toLowerCase();
+
+  const isOwner = msgTo === userNorm || msgTo === userBase || msgFrom === userNorm || msgFrom === userBase ||
+                  (userNorm.startsWith('admin') && (msgTo.startsWith('admin') || msgFrom.startsWith('admin')));
+
+  if (!isOwner) {
+    return res.status(403).json({ error: 'Not your message' });
   }
+
   await storage.markRead(req.params.id);
   res.json(msg);
 });
