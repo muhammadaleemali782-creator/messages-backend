@@ -206,6 +206,28 @@ app.post('/otp/reset-password', otpVerifyLimiter, async (req, res) => {
 
 // ---------------- MAILBOX (browser, requires login) ----------------
 
+
+// User Directory Search
+app.get('/users/directory', auth.requireAuth, async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    const results = await storage.searchGlobalUsers(q);
+    res.json(results);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Permanent Delete Message
+app.delete('/message/:id/permanent', auth.requireAuth, async (req, res) => {
+  try {
+    await storage.deleteMessagePermanently(req.params.id);
+    res.json({ ok: true, message: 'Message permanently deleted' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/messages', auth.requireAuth, async (req, res) => {
   res.json(await storage.listInbox(req.user.product, req.user.identifier));
 });

@@ -307,9 +307,56 @@ async function resolveResetRequest(id, adminUsername) {
 }
 
 module.exports = {
+  deleteMessagePermanently, emptyTrash, searchGlobalUsers,
   saveMessage, listInbox, getMessage, markRead, markUsed, dbSizeBytes,
   createUser, findUser, updatePassword, recordFailedLogin, clearFailedLogins, isLocked,
   createProduct, findProductByName, findProductByKeyHash,
   createAdmin, findAdmin,
   createResetRequest, listPendingRequests, getResetRequest, resolveResetRequest,
 };
+
+
+// ⭐ PERMANENT DELETE & TRASH MANAGEMENT
+async function deleteMessagePermanently(id) {
+  if (mongoose.Types.ObjectId.isValid(id)) {
+    await Message.deleteOne({ _id: id });
+  }
+}
+
+async function emptyTrash(product, identifier) {
+  // Purges deleted messages matching user
+  const normId = (identifier || '').trim().toLowerCase();
+  const baseId = normId.split('@')[0];
+  await Message.deleteMany({
+    $or: [
+      { to: normId },
+      { to: baseId },
+      { from: normId },
+      { from: baseId }
+    ]
+  });
+}
+
+// ⭐ GLOBAL USER DIRECTORY SEARCH ACROSS EDUCA ECOSYSTEM
+async function searchGlobalUsers(query) {
+  const q = (query || '').trim().toLowerCase();
+  const filter = q ? {
+    $or: [
+      { identifier: { $regex: q, $options: 'i' } },
+      { displayName: { $regex: q, $options: 'i' } }
+    ]
+  } : {};
+
+  const users = await User.find(filter)
+    .limit(15)
+    .select('identifier displayName phone createdAt')
+    .lean();
+
+  return users.map(u => ({
+    identifier: u.identifier,
+    name: u.displayName || u.identifier.split('@')[0].toUpperCase(),
+    email: u.identifier.includes('@') ? u.identifier : `${u.identifier}@educaveda.com`,
+    role: u.identifier.toLowerCase().startsWith('admin') ? 'Admin' : 
+          u.identifier.toUpperCase().startsWith('DS') ? 'Distributor' : 'Member'
+  }));
+}
