@@ -162,6 +162,28 @@ async function listInbox(product, identifier) {
   return uniqueDocs;
 }
 
+async function getMessage(id) {
+  if (!mongoose.isValidObjectId(id)) return null;
+  const d = await Message.findById(id).lean();
+  if (!d) return null;
+  return {
+    id: d._id.toString(),
+    product: d.product,
+    from: d.from,
+    to: d.to,
+    subject: inflate(d.subject),
+    body: inflate(d.body),
+    ts: Math.floor(new Date(d.ts).getTime() / 1000),
+    read: !!(d.flags & 1),
+    used: !!(d.flags & 2),
+  };
+}
+
+async function markRead(id) {
+  if (!mongoose.isValidObjectId(id)) return;
+  await Message.updateOne({ _id: id }, { $bit: { flags: { or: 1 } } });
+}
+
 async function markUsed(id) {
   if (!mongoose.isValidObjectId(id)) return;
   await Message.updateOne({ _id: id }, { $bit: { flags: { or: 2 } } });
@@ -219,9 +241,6 @@ async function updatePassword(product, identifier, passwordHash) {
         { identifier: { $regex: new RegExp(`^${baseId}@`, 'i') } }
       ] 
     },
-    { passwordHash, failedAttempts: 0, lockedUntil: null }
-  );
-}, { identifier: baseId }] },
     { passwordHash, failedAttempts: 0, lockedUntil: null }
   );
 }

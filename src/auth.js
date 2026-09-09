@@ -70,24 +70,56 @@ async function findStoreUserAndSync(identifier) {
     const storeConn = getStoreDb();
     if (!storeConn) return null;
     const normId = (identifier || '').trim().toLowerCase();
+    const baseId = normId.split('@')[0];
     const StoreUser = storeConn.models.StoreUser || storeConn.model('StoreUser', new require('mongoose').Schema({}, { strict: false }), 'users');
     
+    // Find user in store DB by email, name (DB001, etc.), or userId
     const u = await StoreUser.findOne({
       $or: [
         { email: normId },
+        { email: `${baseId}@educa.com` },
+        { email: `${baseId}@educaveda.com` },
+        { name: { $regex: new RegExp(`^${normId}$`, 'i') } },
+        { name: { $regex: new RegExp(`^${baseId}$`, 'i') } },
         { userId: { $regex: new RegExp(`^${normId}$`, 'i') } }
-      ]
+      ],
+      isDeleted: { $ne: true },
+      isBlocked: { $ne: true }
     }).lean();
 
     if (u && u.password) {
+      const targetEmail = (u.email || normId).trim().toLowerCase();
+
+      // Check if user already exists in mailbox storage
+      let existing = await storage.findUser(PRODUCT, targetEmail);
+      if (existing) {
+        // Sync password if updated in store
+        await storage.updatePassword(PRODUCT, targetEmail, u.password);
+        return await storage.findUser(PRODUCT, targetEmail);
+      }
+
       // Auto-provision into Mailbox database
       await storage.createUser(
         PRODUCT,
-        normId,
+        targetEmail,
         u.password,
         u.phone || ''
       );
-      return await storage.findUser(PRODUCT, normId);
+
+      // If user logged in using their User ID (e.g. DB001), also ensure alias lookup works
+      if (normId !== targetEmail) {
+        const existingAlias = await storage.findUser(PRODUCT, normId);
+        if (!existingAlias) {
+          await storage.createUser(
+            PRODUCT,
+            normId,
+            u.password,
+            u.phone || ''
+          ).catch(() => {});
+        }
+      }
+
+      return (await storage.findUser(PRODUCT, targetEmail)) || (await storage.findUser(PRODUCT, normId));
     }
   } catch (e) {
     console.error('Store DB fallback error:', e.message);
@@ -135,7 +167,7 @@ async function findUdaanUserAndSync(identifier) {
 
 async function login(identifier, password) {
   identifier = identifier.trim().toLowerCase();
-  const user = await storage.findUser(PRODUCT, identifier);
+  let user = await storage.findUser(PRODUCT, identifier); // MUST be let
   if (!user) {
     user = await findStoreUserAndSync(identifier);
   }
@@ -149,13 +181,23 @@ async function login(identifier, password) {
   if (storage.isLocked(user)) {
     throw new Error('Account temporarily locked due to repeated failed attempts. Try again later.');
   }
-  const ok = await bcrypt.compare(password, user.passwordHash);
+  let ok = await bcrypt.compare(password, user.passwordHash);
+
+  // If password comparison failed, check if password was updated in Store DB
+  if (!ok) {
+    const freshStoreUser = await findStoreUserAndSync(identifier);
+    if (freshStoreUser) {
+      ok = await bcrypt.compare(password, freshStoreUser.passwordHash);
+      if (ok) user = freshStoreUser;
+    }
+  }
+
   if (!ok) {
     await storage.recordFailedLogin(PRODUCT, identifier);
     throw new Error('Invalid email or password');
   }
   await storage.clearFailedLogins(PRODUCT, identifier);
-  return { product: PRODUCT, identifier };
+  return { product: PRODUCT, identifier: user.identifier || identifier };
 }
 
 function resetPassword(identifier, newPassword) {

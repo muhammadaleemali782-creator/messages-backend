@@ -3,7 +3,7 @@
 // into here rather than trusting anything the client sends. Keeping it in
 // one file means there's no route that accidentally skips a check.
 
-const IDENTIFIER_RE = /^[a-zA-Z0-9._%+-]{1,190}(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})?$/; // email OR plain userId
+const IDENTIFIER_RE = /^[a-zA-Z0-9._%/+-]{1,190}(@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})?$/; // email OR plain userId (allows / for store IDs like DB001/DS001)
 const PRODUCT_RE = /^[a-z0-9_-]{2,40}$/;
 
 function isValidIdentifier(v) {
