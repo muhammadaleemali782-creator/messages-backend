@@ -98,6 +98,18 @@ app.post('/provision/update-password', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/provision/delete-user', requireApiKey, async (req, res) => {
+  const { identifier } = req.body;
+  if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
+  try {
+    const product = req.product || 'educa';
+    await storage.deleteUser(product, identifier);
+    res.json({ ok: true, message: 'User deleted successfully from mail server' });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 app.post('/provision/otp-send', requireApiKey, otpLimiter, async (req, res) => {
   const { identifier } = req.body;
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
