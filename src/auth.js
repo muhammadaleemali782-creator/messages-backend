@@ -82,46 +82,59 @@ async function findStoreUserAndSync(identifier) {
         { name: { $regex: new RegExp(`^${normId}$`, 'i') } },
         { name: { $regex: new RegExp(`^${baseId}$`, 'i') } },
         { userId: { $regex: new RegExp(`^${normId}$`, 'i') } }
-      ],
-      isDeleted: { $ne: true },
-      isBlocked: { $ne: true }
+      ]
     }).lean();
 
-    if (u && u.password) {
-      const targetEmail = (u.email || normId).trim().toLowerCase();
-
-      // Check if user already exists in mailbox storage
-      let existing = await storage.findUser(PRODUCT, targetEmail);
-      if (existing) {
-        // Sync password if updated in store
-        await storage.updatePassword(PRODUCT, targetEmail, u.password);
-        return await storage.findUser(PRODUCT, targetEmail);
+    if (u) {
+      // If user is blocked or deleted in Store, remove from Mailbox and throw
+      if (u.isBlocked) {
+        await storage.deleteUser(PRODUCT, normId).catch(() => {});
+        if (u.email) await storage.deleteUser(PRODUCT, u.email).catch(() => {});
+        throw new Error("Aapka account admin dwara block kiya gaya hai.");
+      }
+      if (u.isDeleted) {
+        await storage.deleteUser(PRODUCT, normId).catch(() => {});
+        if (u.email) await storage.deleteUser(PRODUCT, u.email).catch(() => {});
+        throw new Error("Aapka account delete kiya ja chuka hai.");
       }
 
-      // Auto-provision into Mailbox database
-      await storage.createUser(
-        PRODUCT,
-        targetEmail,
-        u.password,
-        u.phone || ''
-      );
+      if (u.password) {
+        const targetEmail = (u.email || normId).trim().toLowerCase();
 
-      // If user logged in using their User ID (e.g. DB001), also ensure alias lookup works
-      if (normId !== targetEmail) {
-        const existingAlias = await storage.findUser(PRODUCT, normId);
-        if (!existingAlias) {
-          await storage.createUser(
-            PRODUCT,
-            normId,
-            u.password,
-            u.phone || ''
-          ).catch(() => {});
+        // Check if user already exists in mailbox storage
+        let existing = await storage.findUser(PRODUCT, targetEmail);
+        if (existing) {
+          return existing;
         }
-      }
 
-      return (await storage.findUser(PRODUCT, targetEmail)) || (await storage.findUser(PRODUCT, normId));
+        // Auto-provision into Mailbox database
+        await storage.createUser(
+          PRODUCT,
+          targetEmail,
+          u.password,
+          u.phone || ''
+        );
+
+        // If user logged in using their User ID (e.g. DB001), also ensure alias lookup works
+        if (normId !== targetEmail) {
+          const existingAlias = await storage.findUser(PRODUCT, normId);
+          if (!existingAlias) {
+            await storage.createUser(
+              PRODUCT,
+              normId,
+              u.password,
+              u.phone || ''
+            ).catch(() => {});
+          }
+        }
+
+        return (await storage.findUser(PRODUCT, targetEmail)) || (await storage.findUser(PRODUCT, normId));
+      }
     }
   } catch (e) {
+    if (e.message && (e.message.includes('block') || e.message.includes('delete'))) {
+      throw e;
+    }
     console.error('Store DB fallback error:', e.message);
   }
   return null;
@@ -167,15 +180,23 @@ async function findUdaanUserAndSync(identifier) {
 
 async function login(identifier, password) {
   identifier = identifier.trim().toLowerCase();
-  let user = await storage.findUser(PRODUCT, identifier); // MUST be let
-  if (!user) {
-    user = await findStoreUserAndSync(identifier);
+
+  // First check Store DB status (to enforce real-time blocks / deletes)
+  let storeUser = null;
+  try {
+    storeUser = await findStoreUserAndSync(identifier);
+  } catch (err) {
+    if (err.message && (err.message.includes('block') || err.message.includes('delete'))) {
+      throw err;
+    }
   }
+
+  let user = (await storage.findUser(PRODUCT, identifier)) || storeUser;
   if (!user) {
     user = await findUdaanUserAndSync(identifier);
   }
   if (!user) {
-    await bcrypt.compare(password, '$2b$12$invalidsaltinvalidsaltinvalidsal.'); // constant-time-ish decoy
+    await bcrypt.compare(password, '$2b$12$invalidsaltinvalidsaltinvalidsal.');
     throw new Error('Invalid email or password');
   }
   if (storage.isLocked(user)) {
@@ -183,12 +204,12 @@ async function login(identifier, password) {
   }
   let ok = await bcrypt.compare(password, user.passwordHash);
 
-  // If password comparison failed, check if password was updated in Store DB
-  if (!ok) {
-    const freshStoreUser = await findStoreUserAndSync(identifier);
-    if (freshStoreUser) {
-      ok = await bcrypt.compare(password, freshStoreUser.passwordHash);
-      if (ok) user = freshStoreUser;
+  // If password comparison failed with mailbox DB, check if store DB has matching password
+  if (!ok && storeUser && storeUser.passwordHash) {
+    const storeOk = await bcrypt.compare(password, storeUser.passwordHash);
+    if (storeOk) {
+      await storage.updatePassword(PRODUCT, identifier, storeUser.passwordHash);
+      ok = true;
     }
   }
 

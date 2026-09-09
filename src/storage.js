@@ -245,6 +245,23 @@ async function updatePassword(product, identifier, passwordHash) {
   );
 }
 
+async function deleteUser(product, identifier) {
+  const normId = (identifier || '').trim().toLowerCase();
+  const baseId = normId.split('@')[0];
+  const domain = (process.env.MAIL_DOMAIN || 'educaveda.com').toLowerCase();
+  const withDomain = normId.includes('@') ? normId : `${normId}@${domain}`;
+
+  return User.deleteMany({
+    $or: [
+      { identifier: normId },
+      { identifier: baseId },
+      { identifier: withDomain },
+      { identifier: { $regex: new RegExp(`^${normId}$`, 'i') } },
+      { identifier: { $regex: new RegExp(`^${baseId}@`, 'i') } }
+    ]
+  });
+}
+
 async function recordFailedLogin(product, identifier) {
   const normId = (identifier || '').trim().toLowerCase();
   const user = await User.findOneAndUpdate(
@@ -328,7 +345,7 @@ async function resolveResetRequest(id, adminUsername) {
 module.exports = {
   deleteMessagePermanently, emptyTrash, searchGlobalUsers,
   saveMessage, listInbox, getMessage, markRead, markUsed, dbSizeBytes,
-  createUser, findUser, updatePassword, recordFailedLogin, clearFailedLogins, isLocked,
+  createUser, findUser, deleteUser, updatePassword, recordFailedLogin, clearFailedLogins, isLocked,
   createProduct, findProductByName, findProductByKeyHash,
   createAdmin, findAdmin,
   createResetRequest, listPendingRequests, getResetRequest, resolveResetRequest,
