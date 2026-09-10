@@ -44,7 +44,7 @@ async function signup(name, password, phone) {
   if (!name || typeof name !== 'string' || name.trim().length < 2) {
     throw new Error('Name must be at least 2 characters');
   }
-  if (!password || password.length < 8) throw new Error('Password must be at least 8 characters');
+  if (!password || password.length < 6) throw new Error('Password must be at least 6 characters');
 
   const identifier = await generateUniqueEmail(name);
   const hash = await bcrypt.hash(password, 12);
@@ -99,36 +99,46 @@ async function findStoreUserAndSync(identifier) {
       }
 
       if (u.password) {
+        const storeHash = u.password;
         const targetEmail = (u.email || normId).trim().toLowerCase();
+        const userName = (u.name || '').trim().toLowerCase();
 
-        // Check if user already exists in mailbox storage
-        let existing = await storage.findUser(PRODUCT, targetEmail);
-        if (existing) {
-          return existing;
-        }
-
-        // Auto-provision into Mailbox database
-        await storage.createUser(
-          PRODUCT,
+        // All aliases for this user across Educa ecosystem
+        const aliasList = [
+          normId,
           targetEmail,
-          u.password,
-          u.phone || ''
-        );
+          userName,
+          `${userName}@educaveda.com`,
+          `${userName}@educa.com`,
+          `${baseId}@educaveda.com`,
+          `${baseId}@educa.com`
+        ].filter(Boolean);
 
-        // If user logged in using their User ID (e.g. DB001), also ensure alias lookup works
-        if (normId !== targetEmail) {
-          const existingAlias = await storage.findUser(PRODUCT, normId);
-          if (!existingAlias) {
+        const uniqueAliases = [...new Set(aliasList)];
+
+        // Ensure every alias in mailbox database has the latest store password hash
+        for (const alias of uniqueAliases) {
+          const existing = await storage.findUser(PRODUCT, alias);
+          if (existing) {
+            if (existing.passwordHash !== storeHash) {
+              await storage.updatePassword(PRODUCT, alias, storeHash);
+            }
+          } else {
             await storage.createUser(
               PRODUCT,
-              normId,
-              u.password,
+              alias,
+              storeHash,
               u.phone || ''
             ).catch(() => {});
           }
         }
 
-        return (await storage.findUser(PRODUCT, targetEmail)) || (await storage.findUser(PRODUCT, normId));
+        return {
+          product: PRODUCT,
+          identifier: targetEmail || normId,
+          passwordHash: storeHash,
+          phone: u.phone || ''
+        };
       }
     }
   } catch (e) {
@@ -181,7 +191,7 @@ async function findUdaanUserAndSync(identifier) {
 async function login(identifier, password) {
   identifier = identifier.trim().toLowerCase();
 
-  // First check Store DB status (to enforce real-time blocks / deletes)
+  // First check Store DB status (to enforce real-time blocks / deletes & live password sync)
   let storeUser = null;
   try {
     storeUser = await findStoreUserAndSync(identifier);
@@ -191,7 +201,7 @@ async function login(identifier, password) {
     }
   }
 
-  let user = (await storage.findUser(PRODUCT, identifier)) || storeUser;
+  let user = storeUser || (await storage.findUser(PRODUCT, identifier));
   if (!user) {
     user = await findUdaanUserAndSync(identifier);
   }
@@ -204,7 +214,7 @@ async function login(identifier, password) {
   }
   let ok = await bcrypt.compare(password, user.passwordHash);
 
-  // If password comparison failed with mailbox DB, check if store DB has matching password
+  // If password comparison failed with primary hash, check if store DB has matching password
   if (!ok && storeUser && storeUser.passwordHash) {
     const storeOk = await bcrypt.compare(password, storeUser.passwordHash);
     if (storeOk) {

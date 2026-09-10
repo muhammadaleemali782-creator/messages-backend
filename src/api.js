@@ -20,6 +20,7 @@ const sanitizeBody = require('./sanitizeBody');
 const auth = require('./auth');
 const adminAuth = require('./adminAuth');
 const storage = require('./storage');
+const bcrypt = require('bcryptjs');
 const { requireApiKey } = require('./apiKey');
 const { sendOtp, verifyOtp } = require('./otp');
 const { sendDirect } = require('./send');
@@ -77,10 +78,18 @@ function badRequest(res, error) { return res.status(400).json({ error }); }
 app.post('/provision/signup', requireApiKey, signupLimiter, async (req, res) => {
   const { identifier, password } = req.body;
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
-  if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 8-200 characters');
+  if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 6-200 characters');
   try {
-    const created = await auth.signup(req.product, identifier, password);
-    res.json({ ok: true, ...created });
+    const product = req.product || 'educa';
+    const cleanId = identifier.trim().toLowerCase();
+    const hash = await bcrypt.hash(password, 12);
+    const existing = await storage.findUser(product, cleanId);
+    if (existing) {
+      await storage.updatePassword(product, cleanId, hash);
+    } else {
+      await storage.createUser(product, cleanId, hash, '');
+    }
+    res.json({ ok: true, product, identifier: cleanId });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -89,9 +98,17 @@ app.post('/provision/signup', requireApiKey, signupLimiter, async (req, res) => 
 app.post('/provision/update-password', requireApiKey, async (req, res) => {
   const { identifier, newPassword } = req.body;
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
-  if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 8-200 characters');
+  if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 6-200 characters');
   try {
-    await auth.resetPassword(identifier, newPassword);
+    const product = req.product || 'educa';
+    const cleanId = identifier.trim().toLowerCase();
+    const hash = await bcrypt.hash(newPassword, 12);
+    const existing = await storage.findUser(product, cleanId);
+    if (existing) {
+      await storage.updatePassword(product, cleanId, hash);
+    } else {
+      await storage.createUser(product, cleanId, hash, '');
+    }
     res.json({ ok: true, message: 'Password updated successfully in mail server' });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -152,7 +169,7 @@ app.post('/provision/message', requireApiKey, async (req, res) => {
 app.post('/auth/signup', async (req, res) => {
   const { name, password, phone } = req.body;
   if (!v.isValidName(name)) return badRequest(res, 'Name must be 2-60 characters');
-  if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 8-200 characters');
+  if (!v.isValidPassword(password)) return badRequest(res, 'Password must be 6-200 characters');
   if (phone !== undefined && phone !== '' && !v.isValidPhone(phone)) {
     return badRequest(res, 'Phone must be 7-16 digits');
   }
@@ -209,7 +226,7 @@ app.post('/otp/reset-password', otpVerifyLimiter, async (req, res) => {
   if (!v.isValidProduct(product)) return badRequest(res, 'Invalid product');
   if (!v.isValidIdentifier(identifier)) return badRequest(res, 'Invalid identifier');
   if (!v.isValidOtp(otp)) return badRequest(res, 'OTP must be 6 digits');
-  if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 8-200 characters');
+  if (!v.isValidPassword(newPassword)) return badRequest(res, 'Password must be 6-200 characters');
   const valid = await verifyOtp(product, identifier, otp);
   if (!valid) return badRequest(res, 'Invalid or expired OTP');
   await auth.resetPassword(identifier, newPassword);

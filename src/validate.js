@@ -13,7 +13,7 @@ function isValidProduct(v) {
   return typeof v === 'string' && PRODUCT_RE.test(v.trim().toLowerCase());
 }
 function isValidPassword(v) {
-  return typeof v === 'string' && v.length >= 8 && v.length <= 200; // upper bound stops bcrypt DoS via huge inputs
+  return typeof v === 'string' && v.length >= 6 && v.length <= 200; // allows standard 6+ char passwords safely
 }
 function isValidSubject(v) {
   return typeof v === 'string' && v.trim().length > 0 && v.length <= 300;
